@@ -35,6 +35,7 @@ import os
 import warnings
 import fnmatch
 import hashlib
+import json
 import gzip
 import dataclasses
 import concurrent.futures as concurrent
@@ -60,7 +61,6 @@ west_top = pathlib.Path(SOF_TOP, "..").resolve()
 default_rimage_key = pathlib.Path(SOF_TOP, "keys", "otc_private_key.pem")
 
 sof_fw_version = None
-sof_build_version = None
 
 if py_platform.system() == "Windows":
 	xtensa_tools_version_postfix = "-win32"
@@ -104,20 +104,29 @@ platform_configs = {
 		f"RI-2022.10{xtensa_tools_version_postfix}",
 		"ace10_LX7HiFi4_2022_10",
 	),
+	"lnl" : PlatformConfig(
+		"lnl", "intel_adsp_ace20_lnl",
+		f"RI-2022.10{xtensa_tools_version_postfix}",
+		"ace10_LX7HiFi4_2022_10",
+	),
+
 	#  NXP platforms
 	"imx8" : PlatformConfig(
 		"imx8", "nxp_adsp_imx8",
-		None, None,
+		f"RI-2023.11{xtensa_tools_version_postfix}",
+		"hifi4_nxp_v5_3_1_prod",
 		RIMAGE_KEY = "key param ignored by imx8",
 	),
 	"imx8x" : PlatformConfig(
 		"imx8x", "nxp_adsp_imx8x",
-		None, None,
+		f"RI-2023.11{xtensa_tools_version_postfix}",
+		"hifi4_nxp_v5_3_1_prod",
 		RIMAGE_KEY = "key param ignored by imx8x"
 	),
 	"imx8m" : PlatformConfig(
 		"imx8m", "nxp_adsp_imx8m",
-		None, None,
+		f"RI-2023.11{xtensa_tools_version_postfix}",
+		"hifi4_mscale_v2_0_2_prod",
 		RIMAGE_KEY = "key param ignored by imx8m"
 	),
 }
@@ -161,7 +170,7 @@ def parse_args():
 	parser.add_argument("platforms", nargs="*", action=validate_platforms_arguments,
 						help="List of platforms to build")
 	parser.add_argument("-d", "--debug", required=False, action="store_true",
-						help="Enable debug build")
+						help="Shortcut for: -o sof/app/debug_overlay.conf")
 	parser.add_argument("-i", "--ipc", required=False, choices=["IPC4"],
 			    help="""Applies --overlay <platform>/ipc4_overlay.conf
 and a different rimage config. Valid only for IPC3 platforms supporting IPC4 too.""")
@@ -273,14 +282,15 @@ def execute_command(*run_args, **run_kwargs):
 		output = f"{print_cwd}; running command:\n    {print_args}"
 		env_arg = run_kwargs.get('env')
 		env_change = set(env_arg.items()) - set(os.environ.items()) if env_arg else None
-		if env_change:
-			output += "\n... with extra/modified environment:"
+		if env_change and (run_kwargs.get('sof_log_env') or args.verbose >= 1):
+			output += "\n... with extra/modified environment:\n"
 			for k_v in env_change:
-				output += f"\n{k_v[0]}={k_v[1]}"
+				output += f"{k_v[0]}={k_v[1]}\n"
 		print(output, flush=True)
 
+	run_kwargs = {k: run_kwargs[k] for k in run_kwargs if not k.startswith("sof_")}
 
-	if run_kwargs.get('check') is None:
+	if not 'check' in run_kwargs:
 		run_kwargs['check'] = True
 	#pylint:disable=subprocess-run-check
 
@@ -440,30 +450,26 @@ def west_update():
 	execute_command(["west", "update"], check=True, timeout=3000, cwd=west_top)
 
 
-def get_build_and_sof_version(abs_build_dir):
-	"""[summary] Get version string major.minor.micro and build of SOF
+def get_sof_version():
+	"""[summary] Get version string major.minor.micro of SOF
 	firmware file. When building multiple platforms from the same SOF
 	commit, all platforms share the same version. So for the 1st platform,
-	generate the version string from sof_version.h and later platforms will
+	extract the version information from sof/versions.json and later platforms will
 	reuse it.
 	"""
 	global sof_fw_version
-	global sof_build_version
-	if sof_fw_version and sof_build_version:
-		return sof_fw_version, sof_build_version
+	if sof_fw_version:
+		return sof_fw_version
 
 	versions = {}
-	with open(pathlib.Path(abs_build_dir,
-		  "zephyr/include/generated/sof_versions.h"), encoding="utf8") as hfile:
-		for hline in hfile:
-			words = hline.split()
-			if words[0] == '#define':
-				versions[words[1]] = words[2]
-	sof_fw_version = versions['SOF_MAJOR'] + '.' + versions['SOF_MINOR'] + '.' + \
-		      versions['SOF_MICRO']
-	sof_build_version = versions['SOF_BUILD']
-
-	return sof_fw_version, sof_build_version
+	with open(SOF_TOP / "versions.json") as versions_file:
+		versions = json.load(versions_file)
+		# Keep this default value the same as the default SOF_MICRO in version.cmake
+		sof_micro = versions['SOF'].get('MICRO', "0")
+		sof_fw_version = (
+			f"{versions['SOF']['MAJOR']}.{versions['SOF']['MINOR']}.{sof_micro}"
+		)
+	return sof_fw_version
 
 def rmtree_if_exists(directory):
 	"This is different from ignore_errors=False because it deletes everything or nothing"
@@ -518,6 +524,60 @@ def build_rimage():
 	if args.verbose > 1:
 			rimage_build_cmd.append("-v")
 	execute_command(rimage_build_cmd, cwd=west_top)
+
+
+def rimage_configuration(platform_dict):
+
+	sign_cmd = []
+
+	rimage_executable = shutil.which("rimage", path=RIMAGE_BUILD_DIR)
+
+	sign_cmd += ["--tool-path", rimage_executable, "--"]
+
+	# Flatten the list of [ ( "-o", "value" ), ...] tuples
+	for t in rimage_options(platform_dict):
+		sign_cmd += t
+
+	return sign_cmd
+
+
+def rimage_options(platform_dict):
+	"""Return a list of default rimage options as a list of tuples,
+	example: [ (-f, 2.5.0), (-b, 1), (-k, key.pem),... ]
+
+	"""
+	opts = []
+
+	signing_key = ""
+	if args.key:
+		signing_key = args.key
+	elif "RIMAGE_KEY" in platform_dict:
+		signing_key = platform_dict["RIMAGE_KEY"]
+	else:
+		signing_key = default_rimage_key
+
+	opts.append(("-k", str(signing_key)))
+
+	sof_fw_vers = get_sof_version()
+
+	opts.append(("-f", sof_fw_vers))
+
+	# Default value is 0 in rimage but for Zephyr the "build counter" has always
+	# been hardcoded to 1 in CMake and there is even a (broken) test that fails
+	# when it's not hardcoded to 1.
+	# FIXME: drop this line once the following test is fixed
+	# tests/avs/fw_00_basic/test_01_load_fw_extended.py::TestLoadFwExtended::()::
+	#                         test_00_01_load_fw_and_check_version
+	opts.append(("-b", "1"))
+
+	if args.ipc == "IPC4":
+		rimage_desc = platform_dict["IPC4_RIMAGE_DESC"]
+	else:
+		rimage_desc = platform_dict["name"] + ".toml"
+
+	opts.append(("-c", str(RIMAGE_SOURCE_DIR / "config" / rimage_desc)))
+
+	return opts
 
 
 STAGING_DIR = None
@@ -587,16 +647,6 @@ def build_platforms():
 
 		platform_build_dir_name = f"build-{platform}"
 
-		# https://docs.zephyrproject.org/latest/guides/west/build-flash-debug.html#one-time-cmake-arguments
-		# https://github.com/zephyrproject-rtos/zephyr/pull/40431#issuecomment-975992951
-		abs_build_dir = pathlib.Path(west_top, platform_build_dir_name)
-		if (pathlib.Path(abs_build_dir, "build.ninja").is_file()
-		    or pathlib.Path(abs_build_dir, "Makefile").is_file()):
-			if args.cmake_args and not args.pristine:
-				print(args.cmake_args)
-				raise RuntimeError("Some CMake arguments are ignored in incremental builds, "
-						   + f"you must delete {abs_build_dir} first")
-
 		PLAT_CONFIG = platform_dict["PLAT_CONFIG"]
 		build_cmd = ["west"]
 		build_cmd += ["-v"] * args.verbose
@@ -630,9 +680,30 @@ def build_platforms():
 			overlays = ";".join(overlays)
 			build_cmd.append(f"-DOVERLAY_CONFIG={overlays}")
 
+		abs_build_dir = pathlib.Path(west_top, platform_build_dir_name)
+
+		# Longer story in https://github.com/zephyrproject-rtos/zephyr/pull/56671
+		if not args.pristine and (
+			pathlib.Path(abs_build_dir, "build.ninja").is_file()
+			or pathlib.Path(abs_build_dir, "Makefile").is_file()
+		):
+			if args.cmake_args or overlays:
+				warnings.warn("""CMake args slow down incremental builds.
+	Passing CMake parameters and overlays on the command line slows down incremental builds
+	see https://docs.zephyrproject.org/latest/guides/west/build-flash-debug.html#one-time-cmake-arguments
+	Try "west config build.cmake-args -- ..." instead.""")
+
+		sign_cmd = ["west"]
+		sign_cmd += ["-v"] * args.verbose
+		sign_cmd += ["sign", "--build-dir", platform_build_dir_name, "--tool", "rimage"]
+		sign_cmd += rimage_configuration(platform_dict)
+
+		# Make sure the build logs don't leave anything hidden
+		execute_command(['west', 'config', '-l'], cwd=west_top)
+
 		# Build
 		try:
-			execute_command(build_cmd, cwd=west_top, env=platf_build_environ)
+			execute_command(build_cmd, cwd=west_top, env=platf_build_environ, sof_log_env=True)
 		except subprocess.CalledProcessError as cpe:
 			zephyr_path = pathlib.Path(west_top, "zephyr")
 			if not os.path.exists(zephyr_path):
@@ -648,32 +719,6 @@ def build_platforms():
 		execute_command([str(smex_executable), "-l", str(fw_ldc_file), str(input_elf_file)])
 
 		# Sign firmware
-		rimage_executable = shutil.which("rimage", path=RIMAGE_BUILD_DIR)
-		rimage_config = RIMAGE_SOURCE_DIR / "config"
-		sign_cmd = ["west"]
-		sign_cmd += ["-v"] * args.verbose
-		sign_cmd += ["sign", "--build-dir", platform_build_dir_name, "--tool", "rimage"]
-		sign_cmd += ["--tool-path", rimage_executable]
-		signing_key = ""
-		if args.key:
-			signing_key = args.key
-		elif "RIMAGE_KEY" in platform_dict:
-			signing_key = platform_dict["RIMAGE_KEY"]
-		else:
-			signing_key = default_rimage_key
-
-		sign_cmd += ["--tool-data", str(rimage_config), "--", "-k", str(signing_key)]
-
-		sof_fw_vers, sof_build_vers = get_build_and_sof_version(abs_build_dir)
-
-		sign_cmd += ["-f", sof_fw_vers]
-
-		sign_cmd += ["-b", sof_build_vers]
-
-		if args.ipc == "IPC4":
-			rimage_desc = pathlib.Path(SOF_TOP, "rimage", "config", platform_dict["IPC4_RIMAGE_DESC"])
-			sign_cmd += ["-c", str(rimage_desc)]
-
 		execute_command(sign_cmd, cwd=west_top)
 
 		if platform not in RI_INFO_UNSUPPORTED:
@@ -726,16 +771,13 @@ def install_platform(platform, sof_platform_output_dir, platf_build_environ):
 		# Regular name
 		output_fwname = "".join(["sof-", platform, ".ri"])
 
-	shutil.copy2(abs_build_dir / "zephyr.ri", abs_build_dir / output_fwname)
-	fw_file_to_copy = abs_build_dir / output_fwname
-
 	install_key_dir = sof_platform_output_dir
 	if args.key_type_subdir != "none":
 		install_key_dir = install_key_dir / args.key_type_subdir
 
 	os.makedirs(install_key_dir, exist_ok=True)
 	# looses file owner and group - file is commonly accessible
-	shutil.copy2(fw_file_to_copy, install_key_dir)
+	shutil.copy2(abs_build_dir / "zephyr.ri", install_key_dir / output_fwname)
 
 
 	# sof-info/ directory
@@ -864,7 +906,7 @@ RI_INFO_UNSUPPORTED += ['rn']
 RI_INFO_UNSUPPORTED += ['mt8186', 'mt8195']
 
 # sof_ri_info.py has not caught up with the latest rimage yet: these will print a warning.
-RI_INFO_FIXME = ['mtl']
+RI_INFO_FIXME = ['mtl', 'lnl']
 
 def reproducible_checksum(platform, ri_file):
 

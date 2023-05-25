@@ -94,7 +94,7 @@ static int selector_verify_params(struct comp_dev *dev,
 		 * pipeline_comp_hw_params()
 		 */
 		out_channels = cd->config.out_channels_count ?
-			cd->config.out_channels_count : buffer_c->stream.channels;
+			cd->config.out_channels_count : audio_stream_get_channels(&buffer_c->stream);
 		params->channels = out_channels;
 	} else {
 		/* fetch source buffer for capture */
@@ -115,7 +115,7 @@ static int selector_verify_params(struct comp_dev *dev,
 		 * pipeline_comp_hw_params()
 		 */
 		in_channels = cd->config.in_channels_count ?
-			cd->config.in_channels_count : buffer_c->stream.channels;
+			cd->config.in_channels_count : audio_stream_get_channels(&buffer_c->stream);
 		params->channels = in_channels;
 	}
 
@@ -126,7 +126,7 @@ static int selector_verify_params(struct comp_dev *dev,
 
 	/* set component period frames */
 	sink_c = buffer_acquire(sinkb);
-	component_set_nearest_period_frames(dev, sink_c->stream.rate);
+	component_set_nearest_period_frames(dev, audio_stream_get_rate(&sink_c->stream));
 	buffer_release(sink_c);
 
 	/* verify input channels */
@@ -402,7 +402,7 @@ static int selector_copy(struct comp_dev *dev)
 
 	source_c = buffer_acquire(source);
 
-	if (!source_c->stream.avail) {
+	if (!audio_stream_get_avail(&source_c->stream)) {
 		buffer_release(source_c);
 		return PPL_STATUS_PATH_STOP;
 	}
@@ -463,11 +463,11 @@ static int selector_prepare(struct comp_dev *dev)
 	sink_c = buffer_acquire(sinkb);
 
 	/* get source data format and period bytes */
-	cd->source_format = source_c->stream.frame_fmt;
+	cd->source_format = audio_stream_get_frm_fmt(&source_c->stream);
 	cd->source_period_bytes = audio_stream_period_bytes(&source_c->stream, dev->frames);
 
 	/* get sink data format and period bytes */
-	cd->sink_format = sink_c->stream.frame_fmt;
+	cd->sink_format = audio_stream_get_frm_fmt(&sink_c->stream);
 	cd->sink_period_bytes = audio_stream_period_bytes(&sink_c->stream, dev->frames);
 
 	/* There is an assumption that sink component will report out
@@ -475,11 +475,11 @@ static int selector_prepare(struct comp_dev *dev)
 	 * reduce channel count between source and sink
 	 */
 	comp_dbg(dev, "selector_prepare(): sourceb->schannels = %u",
-		 source_c->stream.channels);
+		 audio_stream_get_channels(&source_c->stream));
 	comp_dbg(dev, "selector_prepare(): sinkb->channels = %u",
-		 sink_c->stream.channels);
+		 audio_stream_get_channels(&sink_c->stream));
 
-	sink_size = sink_c->stream.size;
+	sink_size = audio_stream_get_size(&sink_c->stream);
 
 	buffer_release(sink_c);
 	buffer_release(source_c);
@@ -576,7 +576,7 @@ SOF_MODULE_INIT(selector, sys_comp_selector_init);
 #else
 static void build_config(struct comp_data *cd, struct module_config *cfg)
 {
-	enum sof_ipc_frame __sparse_cache frame_fmt, valid_fmt;
+	enum sof_ipc_frame frame_fmt, valid_fmt;
 	const struct sof_selector_ipc4_config *sel_cfg = &cd->sel_ipc4_cfg;
 	const struct ipc4_audio_format *out_fmt;
 	int i;
@@ -697,14 +697,17 @@ static void set_selector_params(struct processing_module *mod,
 		struct comp_buffer *sink_buf =
 			container_of(sink_list, struct comp_buffer, source_list);
 		struct comp_buffer __sparse_cache *sink = buffer_acquire(sink_buf);
+		enum sof_ipc_frame frame_fmt, valid_fmt;
 
-		sink->stream.channels = params->channels;
-		sink->stream.rate = params->rate;
 		audio_stream_fmt_conversion(out_fmt->depth,
 					    out_fmt->valid_bit_depth,
-					    &sink->stream.frame_fmt,
-					    &sink->stream.valid_sample_fmt,
+					    &frame_fmt, &valid_fmt,
 					    out_fmt->s_type);
+
+		audio_stream_set_frm_fmt(&sink->stream, frame_fmt);
+		audio_stream_set_valid_fmt(&sink->stream, valid_fmt);
+		audio_stream_set_channels(&sink->stream, params->channels);
+		audio_stream_set_rate(&sink->stream, params->rate);
 
 		sink->buffer_fmt = out_fmt->interleaving_style;
 
@@ -725,15 +728,18 @@ static void set_selector_params(struct processing_module *mod,
 	source = buffer_acquire(src_buf);
 	if (!source->hw_params_configured) {
 		struct ipc4_audio_format *in_fmt;
+		enum sof_ipc_frame frame_fmt, valid_fmt;
 
 		in_fmt = &mod->priv.cfg.base_cfg.audio_fmt;
-		source->stream.channels = in_fmt->channels_count;
-		source->stream.rate = in_fmt->sampling_frequency;
 		audio_stream_fmt_conversion(in_fmt->depth,
 					    in_fmt->valid_bit_depth,
-					    &source->stream.frame_fmt,
-					    &source->stream.valid_sample_fmt,
+					    &frame_fmt, &valid_fmt,
 					    in_fmt->s_type);
+
+		audio_stream_set_frm_fmt(&source->stream, frame_fmt);
+		audio_stream_set_valid_fmt(&source->stream, valid_fmt);
+		audio_stream_set_channels(&source->stream, in_fmt->channels_count);
+		audio_stream_set_rate(&source->stream, in_fmt->sampling_frequency);
 
 		source->buffer_fmt = in_fmt->interleaving_style;
 
@@ -785,7 +791,7 @@ static int selector_verify_params(struct processing_module *mod,
 	/* set component period frames */
 	buffer = list_first_item(&dev->bsink_list, struct comp_buffer, source_list);
 	buffer_c = buffer_acquire(buffer);
-	component_set_nearest_period_frames(dev, buffer_c->stream.rate);
+	component_set_nearest_period_frames(dev, audio_stream_get_rate(&buffer_c->stream));
 	buffer_release(buffer_c);
 
 	return 0;
@@ -914,11 +920,11 @@ static int selector_prepare(struct processing_module *mod)
 	audio_stream_init_alignment_constants(4, 1, &sink_c->stream);
 
 	/* get source data format and period bytes */
-	cd->source_format = source_c->stream.frame_fmt;
+	cd->source_format = audio_stream_get_frm_fmt(&source_c->stream);
 	cd->source_period_bytes = audio_stream_period_bytes(&source_c->stream, dev->frames);
 
 	/* get sink data format and period bytes */
-	cd->sink_format = sink_c->stream.frame_fmt;
+	cd->sink_format = audio_stream_get_frm_fmt(&sink_c->stream);
 	cd->sink_period_bytes = audio_stream_period_bytes(&sink_c->stream, dev->frames);
 
 	/* There is an assumption that sink component will report out
@@ -926,9 +932,9 @@ static int selector_prepare(struct processing_module *mod)
 	 * reduce channel count between source and sink
 	 */
 	comp_info(dev, "selector_prepare(): source sink channel = %u %u",
-		  source_c->stream.channels, sink_c->stream.channels);
+		  audio_stream_get_channels(&source_c->stream), sink_c->stream.channels);
 
-	sink_size = sink_c->stream.size;
+	sink_size = audio_stream_get_size(&sink_c->stream);
 
 	md->mpd.in_buff_size = cd->source_period_bytes;
 	md->mpd.out_buff_size = cd->sink_period_bytes;

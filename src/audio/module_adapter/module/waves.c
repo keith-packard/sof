@@ -235,25 +235,25 @@ static int waves_effect_check(struct comp_dev *dev)
 	/* todo use fallback to comp_verify_params when ready */
 
 	/* resampling not supported */
-	if (src_fmt->rate != snk_fmt->rate) {
+	if (src_fmt->rate != audio_stream_get_rate(snk_fmt)) {
 		comp_err(dev, "waves_effect_check() source %d sink %d rate mismatch",
-			 src_fmt->rate, snk_fmt->rate);
+			 audio_stream_get_rate(src_fmt), audio_stream_get_rate(snk_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* upmix/downmix not supported */
-	if (src_fmt->channels != snk_fmt->channels) {
+	if (src_fmt->channels != audio_stream_get_channels(snk_fmt)) {
 		comp_err(dev, "waves_effect_check() source %d sink %d channels mismatch",
-			 src_fmt->channels, snk_fmt->channels);
+			 audio_stream_get_channels(src_fmt), audio_stream_get_channels(snk_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* different frame format not supported */
-	if (src_fmt->frame_fmt != snk_fmt->frame_fmt) {
+	if (src_fmt->frame_fmt != audio_stream_get_frm_fmt(snk_fmt)) {
 		comp_err(dev, "waves_effect_check() source %d sink %d sample format mismatch",
-			 src_fmt->frame_fmt, snk_fmt->frame_fmt);
+			 audio_stream_get_frm_fmt(src_fmt), audio_stream_get_frm_fmt(snk_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
@@ -265,7 +265,7 @@ static int waves_effect_check(struct comp_dev *dev)
 		goto out;
 	}
 
-	if (!format_is_supported(src_fmt->frame_fmt)) {
+	if (!format_is_supported(audio_stream_get_frm_fmt(src_fmt))) {
 		comp_err(dev, "waves_effect_check() float samples not supported");
 		ret = -EINVAL;
 		goto out;
@@ -277,14 +277,16 @@ static int waves_effect_check(struct comp_dev *dev)
 		goto out;
 	}
 
-	if (!rate_is_supported(src_fmt->rate)) {
-		comp_err(dev, "waves_effect_check() rate %d not supported", src_fmt->rate);
+	if (!rate_is_supported(audio_stream_get_rate(src_fmt))) {
+		comp_err(dev, "waves_effect_check() rate %d not supported",
+			 audio_stream_get_rate(src_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
 
 	if (src_fmt->channels != 2) {
-		comp_err(dev, "waves_effect_check() channels %d not supported", src_fmt->channels);
+		comp_err(dev, "waves_effect_check() channels %d not supported",
+			 audio_stream_get_channels(src_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
@@ -318,10 +320,10 @@ static int waves_effect_init(struct processing_module *mod)
 
 	comp_dbg(dev, "waves_effect_init() start");
 
-	sample_format = format_convert_sof_to_me(src_fmt->frame_fmt);
+	sample_format = format_convert_sof_to_me(audio_stream_get_frm_fmt(src_fmt));
 	if (sample_format < 0) {
 		comp_err(dev, "waves_effect_init() sof sample format %d not supported",
-			 src_fmt->frame_fmt);
+			 audio_stream_get_frm_fmt(src_fmt));
 		ret = -EINVAL;
 		goto out;
 	}
@@ -346,8 +348,8 @@ static int waves_effect_init(struct processing_module *mod)
 	waves_codec->i_buffer = 0;
 	waves_codec->o_buffer = 0;
 
-	waves_codec->i_format.sampleRate = src_fmt->rate;
-	waves_codec->i_format.numChannels = src_fmt->channels;
+	waves_codec->i_format.sampleRate = audio_stream_get_rate(src_fmt);
+	waves_codec->i_format.numChannels = audio_stream_get_channels(src_fmt);
 	waves_codec->i_format.samplesFormat = sample_format;
 	waves_codec->i_format.samplesLayout = buffer_format;
 	waves_codec->o_format = waves_codec->i_format;
@@ -356,9 +358,10 @@ static int waves_effect_init(struct processing_module *mod)
 	/* Prepare a buffer for 1 period worth of data
 	 * dev->pipeline->period stands for the scheduling period in us
 	 */
-	waves_codec->buffer_samples = src_fmt->rate * dev->pipeline->period / 1000000;
-	waves_codec->buffer_bytes = waves_codec->buffer_samples * src_fmt->channels *
-		waves_codec->sample_size_in_bytes;
+	waves_codec->buffer_samples = audio_stream_get_rate(src_fmt) * dev->pipeline->period /
+		1000000;
+	waves_codec->buffer_bytes = waves_codec->buffer_samples *
+		audio_stream_get_channels(src_fmt) * waves_codec->sample_size_in_bytes;
 
 	// trace allows printing only up-to 4 words at a time
 	// logging all the information in two calls

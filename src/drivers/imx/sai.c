@@ -345,8 +345,7 @@ static inline int sai_set_config(struct dai *dai, struct ipc_config_dai *common_
 	dai_update_bits(dai, REG_SAI_XCR4(REG_TX_DIR), mask_cr4, val_cr4);
 	dai_update_bits(dai, REG_SAI_XCR5(REG_TX_DIR), mask_cr5, val_cr5);
 	/* turn on (set to zero) stereo slot */
-	dai_update_bits(dai, REG_SAI_XMR(REG_TX_DIR),  REG_SAI_XMR_MASK,
-		       twm);
+	dai_update_bits(dai, REG_SAI_XMR(REG_TX_DIR), REG_SAI_XMR_MASK, twm);
 
 	val_cr2 |= REG_SAI_CR2_SYNC;
 	mask_cr2 |= REG_SAI_CR2_SYNC_MASK;
@@ -360,7 +359,7 @@ static inline int sai_set_config(struct dai *dai, struct ipc_config_dai *common_
 	dai_update_bits(dai, REG_SAI_XMR(REG_RX_DIR), REG_SAI_XMR_MASK,
 			twm);
 
-#ifdef CONFIG_IMX8M
+#if defined(CONFIG_IMX8M) || defined(CONFIG_IMX93_A55)
 	/*
 	 * For i.MX8MP, MCLK is bound with TX enable bit.
 	 * Therefore, enable transmitter to output MCLK

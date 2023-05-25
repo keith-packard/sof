@@ -63,13 +63,13 @@ static void vol_s24_to_s24(struct processing_module *mod, struct input_stream_bu
 	int32_t *x, *x0;
 	int32_t *y, *y0;
 	int nmax, n, i, j;
-	const int nch = source->channels;
+	const int nch = audio_stream_get_channels(source);
 	int remaining_samples = frames * nch;
 	int32_t tmp;
 
 	memset(cd->peak_regs.peak_meter, 0, sizeof(uint32_t) * cd->channels);
-	x = audio_stream_wrap(source, (char *)source->r_ptr + bsource->consumed);
-	y = audio_stream_wrap(sink, (char *)sink->w_ptr + bsink->size);
+	x = audio_stream_wrap(source, (char *)audio_stream_get_rptr(source) + bsource->consumed);
+	y = audio_stream_wrap(sink, (char *)audio_stream_get_wptr(sink) + bsink->size);
 
 	bsource->consumed += VOL_S32_SAMPLES_TO_BYTES(remaining_samples);
 	bsink->size += VOL_S32_SAMPLES_TO_BYTES(remaining_samples);
@@ -122,13 +122,13 @@ static void vol_s32_to_s32(struct processing_module *mod, struct input_stream_bu
 	int32_t *x, *x0;
 	int32_t *y, *y0;
 	int nmax, n, i, j;
-	const int nch = source->channels;
+	const int nch = audio_stream_get_channels(source);
 	int remaining_samples = frames * nch;
 	int32_t tmp;
 
 	memset(cd->peak_regs.peak_meter, 0, sizeof(uint32_t) * cd->channels);
-	x = audio_stream_wrap(source, (char *)source->r_ptr + bsource->consumed);
-	y = audio_stream_wrap(sink, (char *)sink->w_ptr + bsink->size);
+	x = audio_stream_wrap(source, (char *)audio_stream_get_rptr(source) + bsource->consumed);
+	y = audio_stream_wrap(sink, (char *)audio_stream_get_wptr(sink) + bsink->size);
 	bsource->consumed += VOL_S32_SAMPLES_TO_BYTES(remaining_samples);
 	bsink->size += VOL_S32_SAMPLES_TO_BYTES(remaining_samples);
 	while (remaining_samples) {
@@ -185,13 +185,13 @@ static void vol_s16_to_s16(struct processing_module *mod, struct input_stream_bu
 	int16_t *x, *x0;
 	int16_t *y, *y0;
 	int nmax, n, i, j;
-	const int nch = source->channels;
+	const int nch = audio_stream_get_channels(source);
 	int remaining_samples = frames * nch;
 	int32_t tmp;
 
 	memset(cd->peak_regs.peak_meter, 0, sizeof(uint32_t) * cd->channels);
-	x = audio_stream_wrap(source, (char *)source->r_ptr + bsource->consumed);
-	y = audio_stream_wrap(sink, (char *)sink->w_ptr + bsink->size);
+	x = audio_stream_wrap(source, (char *)audio_stream_get_rptr(source) + bsource->consumed);
+	y = audio_stream_wrap(sink, (char *)audio_stream_get_wptr(sink) + bsink->size);
 
 	bsource->consumed += VOL_S16_SAMPLES_TO_BYTES(remaining_samples);
 	bsink->size += VOL_S16_SAMPLES_TO_BYTES(remaining_samples);
